@@ -1,16 +1,30 @@
-"""The standalone, host-integrated Voice Trainer plugin.
-
-The host owns audio, conversation transport and storage capabilities. This
-package owns only the training workflow and its plugin-scoped state.
-"""
+"""Standalone Voice Trainer plugin for the Voice of Luna host."""
 
 from __future__ import annotations
 
 import json
 import time
 from typing import Any
+from uuid import uuid4
 
 from app.plugin_api import Plugin, PluginTurnResult, ToolCallContext, ToolResult, ToolSpec, TurnContext
+try:  # The released host may lag while this standalone package is developed.
+    from app.plugin_api import OutputEvent
+except ImportError:  # pragma: no cover - compatibility with host <= 0.34
+    from dataclasses import dataclass, field
+
+    @dataclass(frozen=True)
+    class OutputEvent:
+        conversation_id: str
+        turn_id: str
+        clip_id: str
+        state: str
+        delivered_text: str | None = None
+        metadata: dict[str, Any] = field(default_factory=dict)
+
+from .application.context_assembler import ContextAssembler
+from .domain import Controller, Requirement, SessionConfig, SessionState
+from .persistence import SessionRepository
 
 
 def _text(value: Any) -> dict[str, str]:
@@ -18,16 +32,43 @@ def _text(value: Any) -> dict[str, str]:
 
 
 class VoiceTrainerPlugin(Plugin):
-    """Private, stateful practice and reflection workflow for Voice of Luna."""
+    """Model-led conversation with authoritative, persisted session context."""
 
     id = "training"
     name = "Voice Trainer"
     description = "A private, stateful practice and reflection workspace"
 
+    def __init__(self) -> None:
+        self.repository = SessionRepository()
+        self.controller = Controller()
+        self.context_assembler = ContextAssembler(self.controller)
+        self._last_output_event: OutputEvent | None = None
+
     async def configure(self, settings: dict[str, Any]) -> dict[str, Any]:
         goal = str(settings.get("goal", "")).strip()[:240]
+        scenario = str(settings.get("scenario", "")).strip()[:1000]
         skill = str(settings.get("skill", "general")).strip()[:80] or "general"
-        return {"skill": skill, "goal": goal}
+        try:
+            duration = max(60, min(7200, int(settings.get("duration_seconds", 900))))
+            reflection_limit = max(0, min(20, int(settings.get("reflection_limit", 2))))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid training duration or reflection limit") from exc
+        raw_requirements = settings.get("requirements", [])
+        requirements = []
+        if isinstance(raw_requirements, list):
+            for index, item in enumerate(raw_requirements[:20]):
+                label = str(item).strip()[:200]
+                if label:
+                    requirements.append({"id": f"requirement-{index + 1}", "label": label})
+        return {
+            "skill": skill,
+            "goal": goal,
+            "scenario": scenario,
+            "duration_seconds": duration,
+            "reflection_limit": reflection_limit,
+            "requirements": requirements,
+            "protocol_id": str(settings.get("protocol_id", "basic-scene"))[:80],
+        }
 
     def panel_schema(self) -> dict[str, Any]:
         return {
@@ -35,59 +76,102 @@ class VoiceTrainerPlugin(Plugin):
             "fields": [
                 {"name": "skill", "type": "text", "label": "Skill", "placeholder": "conversation"},
                 {"name": "goal", "type": "text", "label": "Session goal", "placeholder": "Describe what to practise"},
+                {"name": "duration_seconds", "type": "number", "label": "Duration (seconds)", "placeholder": "900"},
+                {"name": "scenario", "type": "textarea", "label": "Scenario", "placeholder": "Describe the scene"},
             ],
-            "actions": [{"name": "reset", "label": "Reset session"}],
+            "actions": [
+                {"name": "start_session", "label": "Start"},
+                {"name": "pause_session", "label": "Pause"},
+                {"name": "resume_session", "label": "Resume"},
+                {"name": "end_session", "label": "End"},
+                {"name": "reset", "label": "Reset session"},
+            ],
         }
 
     def get_modes(self) -> list[dict[str, str]]:
-        return [
-            {"id": "practice", "label": "Practice"},
-            {"id": "debrief", "label": "Debrief"},
-            {"id": "free", "label": "Free dialogue"},
-        ]
+        return [{"id": "training", "label": "Training"}, {"id": "free", "label": "Free dialogue"}]
+
+    async def _get_or_create(self, ctx: TurnContext) -> SessionState:
+        session = await self.repository.load(ctx.state)
+        if session is not None:
+            return session
+        settings = ctx.metadata.get("plugin_settings", {})
+        requirements = tuple(Requirement(**item) for item in settings.get("requirements", []) if isinstance(item, dict))
+        config = SessionConfig(
+            duration_seconds=int(settings.get("duration_seconds", 900)),
+            goal=str(settings.get("goal", "")),
+            scenario=str(settings.get("scenario", "")),
+            requirements=requirements,
+            reflection_limit=int(settings.get("reflection_limit", 2)),
+            protocol_id=str(settings.get("protocol_id", "basic-scene")),
+        )
+        session = SessionState(session_id=f"{ctx.conversation_id}:{uuid4().hex[:8]}", config=config)
+        await self.repository.save(ctx.state, session)
+        return session
 
     async def before_turn(self, ctx: TurnContext) -> PluginTurnResult:
+        session = await self._get_or_create(ctx)
         settings = ctx.metadata.get("plugin_settings", {})
-        skill = str(settings.get("skill", "general"))
-        goal = str(settings.get("goal", "")).strip()
-        recent: list[Any] = []
-        if ctx.state is not None:
-            raw = await ctx.state.get("recent_sessions")
-            if raw:
-                try:
-                    decoded = json.loads(raw)
-                    recent = decoded if isinstance(decoded, list) else []
-                except (TypeError, ValueError):
-                    recent = []
-        lines = [f"Training mode: {ctx.active_mode}", f"Current skill: {skill}"]
-        if goal:
-            lines.append(f"Session goal: {goal}")
-        if recent:
-            lines.append(f"Recent session notes: {recent[-3:]}")
-        return PluginTurnResult(prompt_context="\n".join(lines), mode_label=f"TRAINING // {ctx.active_mode.upper()}")
+        prompt = self.context_assembler.build(session, user_message=ctx.user_message, recent_turns=ctx.turns_history)
+        prompt = f"Current skill: {str(settings.get('skill', 'general'))}\n" + prompt
+        self.controller.event(session, "model_context_issued", {"phase": session.phase.value, "remaining_seconds": session.remaining_seconds})
+        await self.repository.save(ctx.state, session)
+        return PluginTurnResult(
+            prompt_context=prompt,
+            mode_label=f"TRAINING // {session.phase.value.upper()}",
+            metadata={"turn_taking_profile": "patient" if session.phase.value == "wait_user" else "normal", "session_id": session.session_id},
+        )
 
     async def after_turn(self, ctx: TurnContext, assistant_response: str) -> None:
-        if ctx.state is None:
-            return
-        raw = await ctx.state.get("recent_sessions")
-        try:
-            recent = json.loads(raw) if raw else []
-        except (TypeError, ValueError):
-            recent = []
-        recent = recent if isinstance(recent, list) else []
-        recent.append({"at": int(time.time()), "mode": ctx.active_mode, "user": ctx.user_message[:240], "assistant": assistant_response[:240]})
-        await ctx.state.set("recent_sessions", json.dumps(recent[-20:], ensure_ascii=False))
+        session = await self._get_or_create(ctx)
+        self.controller.event(session, "model_response_observed", {"text": assistant_response[:2000], "user_message": ctx.user_message[:1000]})
+        await self.repository.save(ctx.state, session)
+        # Compatibility view for older host panels and installations.
+        if ctx.state is not None:
+            raw = await ctx.state.get("recent_sessions")
+            try:
+                recent = json.loads(raw) if raw else []
+            except (TypeError, ValueError):
+                recent = []
+            recent = recent if isinstance(recent, list) else []
+            recent.append({"at": int(time.time()), "mode": ctx.active_mode, "user": ctx.user_message[:240], "assistant": assistant_response[:240]})
+            await ctx.state.set("recent_sessions", json.dumps(recent[-20:], ensure_ascii=False))
+
+    async def on_output_event(self, event: OutputEvent) -> None:
+        """Record delivery facts without claiming that interrupted audio was heard."""
+        # The host currently delivers a generic event without a state facade.
+        # Keep the event in memory for the next context; persistence is done by
+        # the subsequent before_turn through the host-provided state.
+        self._last_output_event = event
 
     async def action(self, name: str, settings: dict[str, Any], state: Any = None) -> dict[str, Any]:
-        if name != "reset" or state is None:
-            raise ValueError("Unknown Training action" if name != "reset" else "Training state is unavailable")
-        await state.delete("recent_sessions")
-        return {"ok": True, "action": name}
+        if state is None:
+            raise ValueError("Training state is unavailable")
+        session = await self.repository.load(state)
+        if name == "reset":
+            await self.repository.clear(state)
+            return {"ok": True, "action": name}
+        if session is None:
+            raise ValueError("No training session exists")
+        now = time.monotonic()
+        if name == "start_session":
+            self.controller.start(session, now)
+        elif name == "pause_session":
+            self.controller.pause(session, now)
+        elif name == "resume_session":
+            self.controller.resume(session, now)
+        elif name == "end_session":
+            self.controller.end(session, "manual")
+        else:
+            raise ValueError(f"Unknown Training action: {name}")
+        await self.repository.save(state, session)
+        return {"ok": True, "action": name, "session": self.controller.snapshot(session)}
 
     def tools(self) -> list[ToolSpec]:
         return [
-            ToolSpec("training", "history", "Read recent training session notes.", {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}}}, "storage.read"),
-            ToolSpec("training", "observe", "Record a short training observation.", {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}, "storage.write"),
+            ToolSpec("training", "status", "Read the authoritative current training session status and timer.", {"type": "object"}, "storage.read"),
+            ToolSpec("training", "history", "Read recent training observations.", {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}}}, "storage.read"),
+            ToolSpec("training", "observe", "Record a short, explicitly stated training observation.", {"type": "object", "properties": {"text": {"type": "string", "maxLength": 500}}, "required": ["text"]}, "storage.write"),
             ToolSpec("training", "progress", "Summarize current training progress.", {"type": "object"}, "storage.read"),
         ]
 
@@ -95,13 +179,23 @@ class VoiceTrainerPlugin(Plugin):
         storage = ctx.storage
         if storage is None:
             raise RuntimeError("Training storage is unavailable")
-        scope = str(ctx.metadata.get("project_scope", "plugin"))
         qualified = str(ctx.metadata.get("tool_qualified_name", name))
+        scope = str(ctx.metadata.get("project_scope", "plugin"))
+        if qualified == "training.status":
+            raw = await storage.get(self.id, f"conversation:{ctx.conversation_id}", SessionRepository.KEY)
+            if not raw:
+                return ToolResult(content_items=[_text("No active training session.")])
+            try:
+                session = SessionState.from_dict(json.loads(raw))
+                return ToolResult(content_items=[_text(json.dumps(self.controller.snapshot(session), ensure_ascii=False))])
+            except (TypeError, ValueError, KeyError):
+                return ToolResult(content_items=[_text("Training session state is unavailable.")], success=False)
         if qualified == "training.history":
             rows = await storage.recent(self.id, scope, int(arguments.get("limit", 8)))
             return ToolResult(content_items=[_text(rows or "No training observations recorded.")])
         if qualified == "training.observe":
-            doc_id = await storage.remember(self.id, scope, str(arguments["text"]), "observation", [])
+            text = str(arguments["text"]).strip()[:500]
+            doc_id = await storage.remember(self.id, scope, text, "observation", [])
             return ToolResult(content_items=[_text(f"Recorded training observation #{doc_id}.")])
         if qualified == "training.progress":
             rows = await storage.recent(self.id, scope, 20)

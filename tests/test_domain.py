@@ -1,0 +1,43 @@
+import json
+
+import pytest
+
+from voice_trainer.application.context_assembler import ContextAssembler
+from voice_trainer.domain import Controller, Phase, Requirement, SessionConfig, SessionState, SessionStatus
+
+
+def make_state() -> SessionState:
+    return SessionState(
+        "s1",
+        SessionConfig(duration_seconds=120, goal="listen", scenario="meeting", requirements=(Requirement("r1", "Ask one question"),), reflection_limit=1),
+    )
+
+
+def test_controller_blocks_model_end_and_reflection_over_limit():
+    state = make_state()
+    controller = Controller()
+    controller.start(state, 10.0)
+    assert controller.decide(state, "end").reason == "model_cannot_end_session"
+    state.reflection_count = 1
+    assert controller.decide(state, "reflect").reason == "reflection_limit_reached"
+
+
+def test_manual_end_enters_debrief_and_restart_is_paused():
+    state = make_state()
+    controller = Controller()
+    controller.start(state, 10.0)
+    controller.end(state)
+    assert state.status is SessionStatus.ENDED
+    assert state.phase is Phase.DEBRIEF
+    restored = SessionState.from_dict(json.loads(json.dumps(state.to_dict())))
+    assert restored.phase is Phase.DEBRIEF
+
+
+def test_context_contains_authoritative_snapshot_and_timer():
+    state = make_state()
+    controller = Controller()
+    controller.start(state, 10.0)
+    context = ContextAssembler(controller).build(state, user_message="Hello", recent_turns=[])
+    assert "Remaining time: 02:00 (120 seconds)" in context
+    assert "The session state and rules above are authoritative." in context
+    assert "CURRENT USER MESSAGE: Hello" in context
