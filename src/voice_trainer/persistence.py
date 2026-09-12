@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .domain.models import SessionState
+from .domain.models import SessionState, SessionStatus
 
 
 class SessionRepository:
@@ -11,7 +11,7 @@ class SessionRepository:
 
     KEY = "active_session"
 
-    async def load(self, state: Any) -> SessionState | None:
+    async def load(self, state: Any, *, recover_running: bool = False) -> SessionState | None:
         if state is None:
             return None
         raw = await state.get(self.KEY)
@@ -19,7 +19,11 @@ class SessionRepository:
             return None
         try:
             value = json.loads(raw)
-            return SessionState.from_dict(value) if isinstance(value, dict) else None
+            session = SessionState.from_dict(value) if isinstance(value, dict) else None
+            if session is not None and recover_running and session.status.value == "running":
+                session.status = SessionStatus.PAUSED
+                session.started_at = None
+            return session
         except (TypeError, ValueError, KeyError):
             return None
 

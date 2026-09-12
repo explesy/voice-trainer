@@ -125,8 +125,4 @@ class SessionState:
             ended_reason=data.get("ended_reason"),
             events=list(data.get("events", [])),
         )
-        if state.status is SessionStatus.RUNNING:
-            # A process restart must not silently consume session time.
-            state.status = SessionStatus.PAUSED
-            state.started_at = None
         return state

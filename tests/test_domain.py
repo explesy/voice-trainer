@@ -4,6 +4,10 @@ import pytest
 
 from voice_trainer.application.context_assembler import ContextAssembler
 from voice_trainer.domain import Controller, Phase, Requirement, SessionConfig, SessionState, SessionStatus
+from app.plugin_storage import PluginStorage
+from app.plugin_api import TurnContext
+from voice_trainer.plugin import ResponseCandidate
+from voice_trainer import VoiceTrainerPlugin
 
 
 def make_state() -> SessionState:
@@ -41,3 +45,16 @@ def test_context_contains_authoritative_snapshot_and_timer():
     assert "Remaining time: 02:00 (120 seconds)" in context
     assert "The session state and rules above are authoritative." in context
     assert "CURRENT USER MESSAGE: Hello" in context
+
+
+@pytest.mark.anyio
+async def test_plugin_gate_accepts_structured_allowed_action(tmp_path):
+    plugin = VoiceTrainerPlugin()
+    state = PluginStorage(tmp_path / "plugin.sqlite3").for_plugin("training", "conv")
+    await plugin.action("start_session", {}, state)
+    decision = await plugin.validate_response(
+        TurnContext("conv", "hello", [], metadata={"plugin_settings": {}}, state=state),
+        ResponseCandidate("conv", "hello", '{"spoken_text":"Try again.","proposed_action":"continue_scene"}'),
+    )
+    assert decision.action == "allow"
+    assert decision.text == "Try again."

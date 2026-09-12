@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.plugin_api import Plugin, PluginTurnResult, ToolCallContext, ToolResult, ToolSpec, TurnContext
 try:  # The released host may lag while this standalone package is developed.
-    from app.plugin_api import OutputEvent
+    from app.plugin_api import OutputEvent, ResponseCandidate, ResponseDecision
 except ImportError:  # pragma: no cover - compatibility with host <= 0.34
     from dataclasses import dataclass, field
 
@@ -20,6 +20,20 @@ except ImportError:  # pragma: no cover - compatibility with host <= 0.34
         clip_id: str
         state: str
         delivered_text: str | None = None
+        metadata: dict[str, Any] = field(default_factory=dict)
+
+    @dataclass(frozen=True)
+    class ResponseCandidate:
+        conversation_id: str
+        user_message: str
+        text: str
+        metadata: dict[str, Any] = field(default_factory=dict)
+
+    @dataclass(frozen=True)
+    class ResponseDecision:
+        action: str = "allow"
+        text: str | None = None
+        reason: str = ""
         metadata: dict[str, Any] = field(default_factory=dict)
 
 from .application.context_assembler import ContextAssembler
@@ -37,6 +51,7 @@ class VoiceTrainerPlugin(Plugin):
     id = "training"
     name = "Voice Trainer"
     description = "A private, stateful practice and reflection workspace"
+    delivery_mode = "gated"
 
     def __init__(self) -> None:
         self.repository = SessionRepository()
@@ -137,6 +152,28 @@ class VoiceTrainerPlugin(Plugin):
             recent.append({"at": int(time.time()), "mode": ctx.active_mode, "user": ctx.user_message[:240], "assistant": assistant_response[:240]})
             await ctx.state.set("recent_sessions", json.dumps(recent[-20:], ensure_ascii=False))
 
+    async def validate_response(self, ctx: TurnContext, candidate: ResponseCandidate) -> ResponseDecision:
+        """Validate the model's proposal while leaving conversational quality to the model."""
+        try:
+            payload = json.loads(candidate.text)
+        except (TypeError, ValueError):
+            return ResponseDecision(action="reject", reason="invalid_json_response")
+        if not isinstance(payload, dict):
+            return ResponseDecision(action="reject", reason="response_not_object")
+        spoken = payload.get("spoken_text")
+        action = payload.get("proposed_action")
+        if not isinstance(spoken, str) or not spoken.strip() or not isinstance(action, str):
+            return ResponseDecision(action="reject", reason="response_schema_invalid")
+        session = await self._get_or_create(ctx)
+        decision = self.controller.decide(session, action)
+        self.controller.event(session, "controller_decision", {"action": action, "allowed": decision.allowed, "reason": decision.reason})
+        await self.repository.save(ctx.state, session)
+        if not decision.allowed:
+            return ResponseDecision(action="reject", reason=decision.reason)
+        self.controller.apply(session, decision)
+        await self.repository.save(ctx.state, session)
+        return ResponseDecision(action="allow", text=spoken.strip(), metadata={"proposed_action": action, "reason_code": payload.get("reason_code", "")})
+
     async def on_output_event(self, event: OutputEvent) -> None:
         """Record delivery facts without claiming that interrupted audio was heard."""
         # The host currently delivers a generic event without a state facade.
@@ -152,7 +189,8 @@ class VoiceTrainerPlugin(Plugin):
             await self.repository.clear(state)
             return {"ok": True, "action": name}
         if session is None:
-            raise ValueError("No training session exists")
+            session = SessionState(session_id=f"{state.conversation_id}:{uuid4().hex[:8]}", config=SessionConfig())
+            await self.repository.save(state, session)
         now = time.monotonic()
         if name == "start_session":
             self.controller.start(session, now)
@@ -162,6 +200,13 @@ class VoiceTrainerPlugin(Plugin):
             self.controller.resume(session, now)
         elif name == "end_session":
             self.controller.end(session, "manual")
+        elif name == "request_repeat_last_line":
+            source = next((item for item in reversed(session.utterances) if item.delivery_state.value == "completed"), None)
+            if source is None:
+                raise ValueError("No completed trainer line to repeat")
+            return {"ok": True, "action": name, "speak_request": {"text": source.text, "source_utterance_id": source.utterance_id}}
+        elif name == "report_protocol_issue":
+            self.controller.event(session, "protocol_issue_reported", {"details": str(settings.get("details", ""))[:1000]})
         else:
             raise ValueError(f"Unknown Training action: {name}")
         await self.repository.save(state, session)
