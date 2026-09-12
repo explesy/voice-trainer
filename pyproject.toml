@@ -1,0 +1,27 @@
+[project]
+name = "voice-trainer"
+version = "0.1.0"
+description = "Standalone Voice Trainer plugin for the Voice of Luna host"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "voice-of-luna-backend @ git+https://github.com/explesy/voice-of-luna.git@main#subdirectory=backend",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project.entry-points."voice_of_luna.plugins"]
+voice_trainer = "voice_trainer.plugin:VoiceTrainerPlugin"
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
