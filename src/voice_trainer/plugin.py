@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover - compatibility with host <= 0.34
         metadata: dict[str, Any] = field(default_factory=dict)
 
 from .application.context_assembler import ContextAssembler
+from .application.debrief import build_debrief
 from .domain import Controller, Requirement, SessionConfig, SessionState
 from .persistence import SessionRepository
 
@@ -200,6 +201,10 @@ class VoiceTrainerPlugin(Plugin):
             self.controller.resume(session, now)
         elif name == "end_session":
             self.controller.end(session, "manual")
+        elif name == "open_debrief":
+            if session.status.value != "ended":
+                raise ValueError("Debrief requires an ended session")
+            return {"ok": True, "action": name, "debrief": build_debrief(session)}
         elif name == "request_repeat_last_line":
             source = next((item for item in reversed(session.utterances) if item.delivery_state.value == "completed"), None)
             if source is None:
