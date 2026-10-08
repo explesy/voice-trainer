@@ -32,6 +32,7 @@ class ContextAssembler:
             "- Keep scene replies concise and ask one question at a time.",
             "- Do not claim that the session ended; only the user or host action can end it.",
             "- Propose one action compatible with the current phase.",
+            "- Allowed proposed_action choices: 'continue_scene', 'wait_user', 'reflect', 'replay' (or 'debrief' if ended).",
             "- Use the supplied remaining time; never invent a timer value.",
             "",
             "RETURN JSON with exactly: spoken_text, proposed_action, reason_code.",

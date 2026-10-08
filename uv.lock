@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "voice-trainer"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "voice-of-luna-backend" },

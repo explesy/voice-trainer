@@ -58,3 +58,44 @@ async def test_plugin_gate_accepts_structured_allowed_action(tmp_path):
     )
     assert decision.action == "allow"
     assert decision.text == "Try again."
+
+
+@pytest.mark.anyio
+async def test_plugin_gate_accepts_markdown_code_fences(tmp_path):
+    plugin = VoiceTrainerPlugin()
+    state = PluginStorage(tmp_path / "plugin.sqlite3").for_plugin("training", "conv")
+    # Session not started manually - verifies auto-start as well!
+    fenced_response = '```json\n{"spoken_text": "Good point, let us continue.", "proposed_action": "continue_scene", "reason_code": "scene"}\n```'
+    decision = await plugin.validate_response(
+        TurnContext("conv", "hello", [], metadata={"plugin_settings": {}}, state=state),
+        ResponseCandidate("conv", "hello", fenced_response),
+    )
+    assert decision.action == "allow"
+    assert decision.text == "Good point, let us continue."
+
+
+@pytest.mark.anyio
+async def test_plugin_gate_falls_back_on_plain_text(tmp_path):
+    plugin = VoiceTrainerPlugin()
+    state = PluginStorage(tmp_path / "plugin.sqlite3").for_plugin("training", "conv")
+    plain_text_response = "Tell me more about what happened next."
+    decision = await plugin.validate_response(
+        TurnContext("conv", "hello", [], metadata={"plugin_settings": {}}, state=state),
+        ResponseCandidate("conv", "hello", plain_text_response),
+    )
+    assert decision.action == "allow"
+    assert decision.text == "Tell me more about what happened next."
+    assert decision.metadata.get("proposed_action") == "continue_scene"
+
+
+@pytest.mark.anyio
+async def test_before_turn_auto_starts_prepared_session(tmp_path):
+    plugin = VoiceTrainerPlugin()
+    state = PluginStorage(tmp_path / "plugin.sqlite3").for_plugin("training", "conv")
+    turn_res = await plugin.before_turn(
+        TurnContext("conv", "hello", [], metadata={"plugin_settings": {}}, state=state),
+    )
+    assert "TRAINING // SCENE" in (turn_res.mode_label or "")
+    session = await plugin.repository.load(state)
+    assert session is not None
+    assert session.status == SessionStatus.RUNNING

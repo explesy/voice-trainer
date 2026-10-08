@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 from uuid import uuid4
@@ -38,12 +39,38 @@ except ImportError:  # pragma: no cover - compatibility with host <= 0.34
 
 from .application.context_assembler import ContextAssembler
 from .application.debrief import build_debrief
-from .domain import Controller, Requirement, SessionConfig, SessionState
+from .domain import Controller, Phase, Requirement, SessionConfig, SessionState, SessionStatus
 from .persistence import SessionRepository
 
 
 def _text(value: Any) -> dict[str, str]:
     return {"type": "text", "text": str(value)}
+
+
+def _extract_json_payload(text: str) -> dict[str, Any] | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+            raw = "\n".join(lines[1:-1]).strip()
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except (TypeError, ValueError):
+        pass
+
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return data
+        except (TypeError, ValueError):
+            pass
+    return None
 
 
 class VoiceTrainerPlugin(Plugin):
@@ -127,6 +154,8 @@ class VoiceTrainerPlugin(Plugin):
 
     async def before_turn(self, ctx: TurnContext) -> PluginTurnResult:
         session = await self._get_or_create(ctx)
+        if session.status is SessionStatus.PREPARED:
+            self.controller.start(session, time.monotonic())
         settings = ctx.metadata.get("plugin_settings", {})
         prompt = self.context_assembler.build(session, user_message=ctx.user_message, recent_turns=ctx.turns_history)
         prompt = f"Current skill: {str(settings.get('skill', 'general'))}\n" + prompt
@@ -155,17 +184,30 @@ class VoiceTrainerPlugin(Plugin):
 
     async def validate_response(self, ctx: TurnContext, candidate: ResponseCandidate) -> ResponseDecision:
         """Validate the model's proposal while leaving conversational quality to the model."""
-        try:
-            payload = json.loads(candidate.text)
-        except (TypeError, ValueError):
-            return ResponseDecision(action="reject", reason="invalid_json_response")
+        session = await self._get_or_create(ctx)
+        if session.status is SessionStatus.PREPARED:
+            self.controller.start(session, time.monotonic())
+
+        payload = _extract_json_payload(candidate.text)
+        if payload is None:
+            clean_text = candidate.text.strip()
+            if clean_text and not clean_text.startswith("{"):
+                action = "continue_scene" if session.phase in {Phase.SCENE, Phase.WAIT_USER} else "reflect"
+                payload = {
+                    "spoken_text": clean_text,
+                    "proposed_action": action,
+                    "reason_code": "fallback_plain_text",
+                }
+            else:
+                return ResponseDecision(action="reject", reason="invalid_json_response")
+
         if not isinstance(payload, dict):
             return ResponseDecision(action="reject", reason="response_not_object")
         spoken = payload.get("spoken_text")
         action = payload.get("proposed_action")
         if not isinstance(spoken, str) or not spoken.strip() or not isinstance(action, str):
             return ResponseDecision(action="reject", reason="response_schema_invalid")
-        session = await self._get_or_create(ctx)
+
         decision = self.controller.decide(session, action)
         self.controller.event(session, "controller_decision", {"action": action, "allowed": decision.allowed, "reason": decision.reason})
         await self.repository.save(ctx.state, session)

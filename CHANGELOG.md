@@ -6,6 +6,13 @@ The project follows Semantic Versioning. Active implementation work belongs in G
 
 ## Unreleased
 
+## 0.2.1 — 2026-10-08
+
+### Fixed
+- Added robust JSON extraction from markdown code fences and plain-text fallback in response validation (fixes #1).
+- Auto-start unstarted `PREPARED` sessions on the user's first turn instead of rejecting turns with `session_not_running` (fixes #1).
+- Enumerated allowed `proposed_action` choices in the ContextAssembler prompt (fixes #2).
+
 ### Documentation
 
 - Added canonical repository guidance for AI-assisted development.
