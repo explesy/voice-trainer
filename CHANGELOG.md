@@ -6,6 +6,12 @@ The project follows Semantic Versioning. Active implementation work belongs in G
 
 ## Unreleased
 
+## 0.2.2 — 2026-10-09
+
+### Fixed
+- Made `start_session` and `resume_session` idempotent so re-starting an already-running session does not raise `ValueError` / HTTP 400.
+- Synchronized configured input settings (`goal`, `scenario`, `duration_seconds`, `reflection_limit`) directly into `SessionConfig` when starting or initializing a session.
+
 ## 0.2.1 — 2026-10-08
 
 ### Fixed

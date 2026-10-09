@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import re
 import time
@@ -231,16 +232,45 @@ class VoiceTrainerPlugin(Plugin):
         if name == "reset":
             await self.repository.clear(state)
             return {"ok": True, "action": name}
+
+        def _sync_config(target_config: SessionConfig) -> SessionConfig:
+            if not isinstance(settings, dict):
+                return target_config
+            updates: dict[str, Any] = {}
+            if "goal" in settings and str(settings["goal"]).strip():
+                updates["goal"] = str(settings["goal"]).strip()[:240]
+            if "scenario" in settings and str(settings["scenario"]).strip():
+                updates["scenario"] = str(settings["scenario"]).strip()[:1000]
+            if "duration_seconds" in settings:
+                try:
+                    updates["duration_seconds"] = max(60, min(7200, int(settings["duration_seconds"])))
+                except (TypeError, ValueError):
+                    pass
+            if "reflection_limit" in settings:
+                try:
+                    updates["reflection_limit"] = max(0, min(20, int(settings["reflection_limit"])))
+                except (TypeError, ValueError):
+                    pass
+            return replace(target_config, **updates) if updates else target_config
+
         if session is None:
-            session = SessionState(session_id=f"{state.conversation_id}:{uuid4().hex[:8]}", config=SessionConfig())
+            config = _sync_config(SessionConfig())
+            session = SessionState(session_id=f"{state.conversation_id}:{uuid4().hex[:8]}", config=config)
             await self.repository.save(state, session)
         now = time.monotonic()
         if name == "start_session":
-            self.controller.start(session, now)
+            session.config = _sync_config(session.config)
+            if session.status is SessionStatus.RUNNING:
+                pass
+            else:
+                self.controller.start(session, now)
         elif name == "pause_session":
             self.controller.pause(session, now)
         elif name == "resume_session":
-            self.controller.resume(session, now)
+            if session.status is SessionStatus.RUNNING:
+                pass
+            else:
+                self.controller.resume(session, now)
         elif name == "end_session":
             self.controller.end(session, "manual")
         elif name == "open_debrief":

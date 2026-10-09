@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "voice-trainer"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "voice-of-luna-backend" },

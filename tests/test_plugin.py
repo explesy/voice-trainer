@@ -20,3 +20,32 @@ async def test_plugin_persists_state_and_uses_host_storage(tmp_path):
     context = ToolCallContext("conv-1", "training", "practice", metadata={"tool_qualified_name": "training.observe", "project_scope": "project"}, storage=storage)
     observed = await plugin.call_tool("training.observe", {"text": "Good pacing"}, context)
     assert "Recorded training observation" in observed.content_items[0]["text"]
+
+
+@pytest.mark.anyio
+async def test_plugin_action_start_session_idempotent_and_syncs_settings(tmp_path):
+    plugin = VoiceTrainerPlugin()
+    state = PluginStorage(tmp_path / "plugins.sqlite3").for_plugin("training", "conv-2")
+
+    # Start session with settings
+    res1 = await plugin.action(
+        "start_session",
+        {"scenario": "Negotiations with director", "goal": "Find true reason", "duration_seconds": 300},
+        state=state,
+    )
+    assert res1["ok"] is True
+    assert res1["session"]["status"] == "running"
+    assert res1["session"]["scenario"] == "Negotiations with director"
+    assert res1["session"]["goal"] == "Find true reason"
+    assert res1["session"]["remaining_seconds"] == 300
+
+    # Repeat start_session must be idempotent and not raise ValueError
+    res2 = await plugin.action(
+        "start_session",
+        {"scenario": "Updated scenario", "goal": "Find true reason"},
+        state=state,
+    )
+    assert res2["ok"] is True
+    assert res2["session"]["status"] == "running"
+    assert res2["session"]["scenario"] == "Updated scenario"
+
