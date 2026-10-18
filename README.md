@@ -4,9 +4,9 @@ Voice Trainer is a standalone, local-first training workflow for the [Voice of L
 
 ## Current status
 
-The current `0.1.0` implementation is a minimal external Voice of Luna plugin. It provides settings, `practice` / `debrief` / `free` modes, bounded recent-session state, a reset action, and storage-backed training tools.
+The current `0.2.2` implementation is an external Voice of Luna plugin with an initial deterministic domain controller. It provides settings, `practice` / `debrief` / `free` modes, bounded recent-session state, a reset action, and storage-backed training tools.
 
-The richer deterministic trainer controller described in `docs/PROTOCOL.md` is the **target architecture and is not yet implemented**. Current truth is summarized in `docs/CURRENT_STATUS.md`.
+The full deterministic session protocol in `docs/PROTOCOL.md` remains a **target**: the initial domain controller enforces some transitions and limits, but the complete protocol is not yet implemented. Current truth is summarized in `docs/CURRENT_STATUS.md`.
 
 ## Install into a local Voice of Luna environment
 
