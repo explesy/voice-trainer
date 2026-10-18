@@ -74,7 +74,7 @@ This is the only layer that should normally import `app.plugin_api` or other doc
 
 ## Current implementation
 
-As of v0.1.0, most behavior still lives directly in `VoiceTrainerPlugin` in `src/voice_trainer/plugin.py`. This is acceptable as an extraction/bootstrap state, but it is not the final architecture.
+As of v0.2.2, an initial deterministic `Controller` lives in `src/voice_trainer/domain/controller.py`, with `ContextAssembler`, `SessionRepository`, and debrief facts in separate modules. `VoiceTrainerPlugin` remains the host adapter; the full target architecture and protocol are not yet complete.
 
 Do not build substantial deterministic training logic into that class. New controller semantics should move toward the layered boundary above.
 
