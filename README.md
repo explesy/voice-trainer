@@ -27,7 +27,7 @@ Voice of Luna owns generic audio/STT/TTS, conversation/model transport, plugin d
 
 The package intentionally receives only generic host contexts: plugin-scoped state, configured settings, tool storage and declared capabilities. It must not receive or persist raw recordings, Codex credentials, tokens, secret-bearing environment data, or unrestricted personal training transcripts.
 
-The current plugin does keep bounded operational continuity state: up to 20 recent turn summaries, with user and assistant text truncated to 240 characters. This is not the canonical long-lived personal training history. Private Relationship-training scenarios, rich personal context and durable personal history remain external Project Memory/context and must not be committed to this repository.
+The current plugin stores a serialized active session in host-provided plugin state; model context includes only the last six recent turns with truncated text. This is not the canonical long-lived personal training history. Private Relationship-training scenarios, rich personal context and durable personal history remain external Project Memory/context and must not be committed to this repository.
 
 See `docs/ARCHITECTURE.md` for the persistence/ownership rules.
 
