@@ -2,7 +2,7 @@
 
 ## Status
 
-This document defines the target deterministic training protocol. As of v0.1.0, the full controller/state machine described here is **not yet implemented**.
+This document defines the **target** deterministic training protocol. As of v0.2.2, an initial `Controller` exists in `src/voice_trainer/domain/controller.py` and has domain tests: it validates selected phase/actions, rejects model-directed `end`, bounds reflections, and requires a recorded source ID for replay. The complete protocol here is **not yet implemented** (including authoritative requirement-completion gates and complete exact-replay/debrief semantics).
 
 When code and this document disagree, treat the mismatch as implementation work rather than silently redefining the protocol in prompt text.
 
