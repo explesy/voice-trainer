@@ -99,9 +99,9 @@ Examples:
 - compact recent-session summaries needed for continuity;
 - plugin configuration or locally useful control metadata.
 
-Current implementation stores up to 20 recent turn summaries, truncating each user and assistant text field to 240 characters.
+Current implementation keeps a compatibility list of up to 20 recent turn summaries (240 characters per user/assistant field), and limits the prompt to six recent turns. Separately, `SessionRepository` serializes the active `SessionState` with its event history. The current `after_turn` event includes truncated assistant/user text (up to 2,000/1,000 characters) and the serialized event list has **no explicit count or retention bound** in v0.2.2. This is a known implementation gap against the intended bounded-state policy; do not describe all operational session text as bounded.
 
-Retention must remain bounded and documented. This state is not a substitute for durable personal memory.
+Retention must be bounded and documented before claiming compliance with this policy. This state is not a substitute for durable personal memory.
 
 ### 3. Training observations
 
